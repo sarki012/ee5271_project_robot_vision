@@ -1,4 +1,6 @@
 # Erik Sarkinen
+# EE 5271 Project
+
 
 from pylibftdi import Device
 import os
