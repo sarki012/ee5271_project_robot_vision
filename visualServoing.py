@@ -1,3 +1,5 @@
+# Erik Sarkinen
+
 from re import X
 from pylibftdi import Device
 import os

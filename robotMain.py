@@ -1,3 +1,5 @@
+# Erik Sarkinen
+
 from pylibftdi import Device
 import os
 import glob
