@@ -58,8 +58,8 @@ def task4():
         # Set MJPG to save USB bandwidth
         cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
         # Set a reasonable resolution for display to fit all on screen
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 480)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 360)
         if cap.isOpened():
             print(f"Camera {index} opened successfully.")
         else:
@@ -67,6 +67,9 @@ def task4():
         caps.append(cap)
 
     print("Press 'q' to quit.")
+    # Create a window and move it to the top-left corner (0,0)
+    cv2.namedWindow("Multi-Camera View", cv2.WINDOW_AUTOSIZE)
+    cv2.moveWindow("Multi-Camera View", 0, 0)
 
     while True:
         frames = []
@@ -77,25 +80,31 @@ def task4():
                 ret, frame = cap.read()
                 if ret:
                     # Resize frame to ensure they match for stacking
-                    # (320, 240) matches the set resolution
-                    frame = cv2.resize(frame, (320, 240))
+                    # (480, 360) matches the set resolution (1.5x of 320x240)
+                    frame = cv2.resize(frame, (480, 360))
+
+                    # Prepare gray image
+                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+                    # If left or right camera, save clean gray copy for matching
+                    if i == left_cam_idx or i == right_cam_idx:
+                        gray_frames[i] = gray.copy()
+
                     # Add label
                     idx = camera_indices[i]
                     label = camera_labels.get(idx, f"Cam {idx}")
                     cv2.putText(frame, label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 
                                 1, (0, 255, 0), 2)
                     frames.append(frame)
-                    if i == left_cam_idx or i == right_cam_idx:
-                        gray_frames[i] = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 else:
                     # Frame read failed
-                    blank = np.zeros((240, 320, 3), dtype=np.uint8)
+                    blank = np.zeros((360, 480, 3), dtype=np.uint8)
                     cv2.putText(blank, f"No Signal {i}", (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 
                                 0.8, (0, 0, 255), 2)
                     frames.append(blank)
             else:
                 # Camera not opened
-                blank = np.zeros((240, 320, 3), dtype=np.uint8)
+                blank = np.zeros((360, 480, 3), dtype=np.uint8)
                 cv2.putText(blank, f"Cam {i} Error", (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 
                             0.8, (0, 0, 255), 2)
                 frames.append(blank)
@@ -109,14 +118,34 @@ def task4():
                 img_left_gray = gray_frames[left_cam_idx]
                 img_right_gray = gray_frames[right_cam_idx]
                 
+                # Find matches on clean grayscale images before drawing on them
+                x1, x2, kp1, kp2, good_matches = find_match(img_left_gray, img_right_gray, show_window=False)
+
+                # --- Prepare visualization images with contours ---
+                # Convert to BGR to draw color contours
+                vis_img_left = cv2.cvtColor(img_left_gray, cv2.COLOR_GRAY2BGR)
+                vis_img_right = cv2.cvtColor(img_right_gray, cv2.COLOR_GRAY2BGR)
+
+                # Find and draw contours on left image
+                blurred_left = cv2.blur(img_left_gray, (3, 3))
+                canny_left = cv2.Canny(blurred_left, 50, 150)
+                contours_left, _ = cv2.findContours(canny_left, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                cv2.drawContours(vis_img_left, contours_left, -1, (0, 0, 255), 2)
+
+                # Find and draw contours on right image
+                blurred_right = cv2.blur(img_right_gray, (3, 3))
+                canny_right = cv2.Canny(blurred_right, 50, 150)
+                contours_right, _ = cv2.findContours(canny_right, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                cv2.drawContours(vis_img_right, contours_right, -1, (0, 0, 255), 2)
+
                 try:
-                    x1, x2, kp1, kp2, good_matches = find_match(img_left_gray, img_right_gray, show_window=False)
-                    # Use RANSAC to find inliers and visualize them
-                    _, ransac_vis = align_image_using_feature(x1, x2, 5.0, 200, img_left_gray, img_right_gray)
+                    # Use RANSAC to find inliers and visualize them on the images with contours
+                    _, ransac_vis = align_image_using_feature(x1, x2, 5.0, 200, vis_img_left, vis_img_right)
                     if ransac_vis is not None:
                         match_vis_img = ransac_vis
                     else:
-                        match_vis_img = cv2.drawMatches(img_left_gray, kp1, img_right_gray, kp2, good_matches, None, flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
+                        # Fallback to drawing raw matches on the images with contours
+                        match_vis_img = cv2.drawMatches(vis_img_left, kp1, vis_img_right, kp2, good_matches, None, flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
                 except Exception as e:
                     # Handle cases where matching fails
                     h, w = img_left_gray.shape
@@ -277,10 +306,16 @@ def align_image_using_feature(x1, x2, ransac_thr, ransac_iter, img1=None, img2=N
         if img1 is not None and img2 is not None:
             h1, w1 = img1.shape[:2]
             h2, w2 = img2.shape[:2]
-            vis = np.zeros((max(h1, h2), w1 + w2), np.uint8)
-            vis[:h1, :w1] = img1
-            vis[:h2, w1:w1+w2] = img2
-            vis = cv2.cvtColor(vis, cv2.COLOR_GRAY2BGR)
+            
+            # Create a color canvas to draw on
+            vis = np.zeros((max(h1, h2), w1 + w2, 3), np.uint8)
+            
+            # Place images on the canvas, converting to color if they are grayscale
+            img1_c = img1 if len(img1.shape) == 3 else cv2.cvtColor(img1, cv2.COLOR_GRAY2BGR)
+            img2_c = img2 if len(img2.shape) == 3 else cv2.cvtColor(img2, cv2.COLOR_GRAY2BGR)
+            
+            vis[:h1, :w1] = img1_c
+            vis[:h2, w1:w1+w2] = img2_c
 
             for i in range(len(x1)):
                 pt1 = (int(x1[i][0]), int(x1[i][1]))
