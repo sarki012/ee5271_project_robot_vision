@@ -5,6 +5,7 @@ import cv2
 import numpy as np
 import numpy as np
 import math
+from collections import deque
 
 def task4():
     # Define camera indices for the 3 cameras
@@ -71,6 +72,8 @@ def task4():
     cv2.namedWindow("Multi-Camera View", cv2.WINDOW_AUTOSIZE)
     cv2.moveWindow("Multi-Camera View", 0, 0)
 
+    circle_deque = deque(maxlen=2)
+    misc_deque = deque(maxlen=100)
     while True:
         frames = []
         gray_frames = {}
@@ -119,7 +122,24 @@ def task4():
                 img_right_gray = gray_frames[right_cam_idx]
                 
                 # Find matches on clean grayscale images before drawing on them
-                x1, x2, kp1, kp2, good_matches = find_match(img_left_gray, img_right_gray, show_window=False)
+                sx1, sx2, _, _, _ = find_match(img_left_gray, img_right_gray, show_window=False)
+                cx1, cx2 = find_circle_match(img_left_gray, img_right_gray)
+                
+                x1_list = []
+                x2_list = []
+                if len(sx1) > 0:
+                    x1_list.append(sx1)
+                    x2_list.append(sx2)
+                if len(cx1) > 0:
+                    x1_list.append(cx1)
+                    x2_list.append(cx2)
+                
+                if x1_list:
+                    x1 = np.vstack(x1_list)
+                    x2 = np.vstack(x2_list)
+                else:
+                    x1 = np.array([])
+                    x2 = np.array([])
 
                 # --- Prepare visualization images with contours ---
                 # Convert to BGR to draw color contours
@@ -140,12 +160,36 @@ def task4():
 
                 try:
                     # Use RANSAC to find inliers and visualize them on the images with contours
-                    _, ransac_vis = align_image_using_feature(x1, x2, 5.0, 200, vis_img_left, vis_img_right)
-                    if ransac_vis is not None:
-                        match_vis_img = ransac_vis
-                    else:
-                        # Fallback to drawing raw matches on the images with contours
-                        match_vis_img = cv2.drawMatches(vis_img_left, kp1, vis_img_right, kp2, good_matches, None, flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
+                    _, _, best_inliers = align_image_using_feature(x1, x2, 5.0, 200, vis_img_left, vis_img_right)
+                    
+                    h, w = vis_img_left.shape[:2]
+                    combined_vis = np.hstack((vis_img_left, vis_img_right))
+
+                    if best_inliers is not None:
+                        for i in range(len(x1)):
+                            pt1 = (int(x1[i][0]), int(x1[i][1]))
+                            pt2 = (int(x2[i][0] + w), int(x2[i][1]))
+                            color = (0, 255, 0) if best_inliers[i] else (255, 0, 0)
+                            
+                            is_circle = False
+                            if len(cx1) > 0:
+                                dists = np.linalg.norm(cx1 - x1[i], axis=1)
+                                if np.min(dists) < 1.0:
+                                    is_circle = True
+                            
+                            if is_circle:
+                                circle_deque.append((pt1, pt2, color, is_circle))
+                            else:
+                                misc_deque.append((pt1, pt2, color, is_circle))
+
+                    all_matches = list(circle_deque) + list(misc_deque)
+                    for (pt1, pt2, color, is_circle) in all_matches:
+                        cv2.line(combined_vis, pt1, pt2, color, 2)
+                        if is_circle:
+                            cv2.circle(combined_vis, pt1, 15, (0, 255, 255), 2)
+                            cv2.circle(combined_vis, pt2, 15, (0, 255, 255), 2)
+                    
+                    match_vis_img = combined_vis
                 except Exception as e:
                     # Handle cases where matching fails
                     h, w = img_left_gray.shape
@@ -173,6 +217,31 @@ def task4():
         cap.release()
     cv2.destroyAllWindows()
     return combined_image
+
+def find_circle_match(img1, img2):
+    circles1 = cv2.HoughCircles(img1, cv2.HOUGH_GRADIENT, 1, 20, param1=50, param2=30, minRadius=10, maxRadius=300)
+    circles2 = cv2.HoughCircles(img2, cv2.HOUGH_GRADIENT, 1, 20, param1=50, param2=30, minRadius=10, maxRadius=300)
+    
+    x1 = []
+    x2 = []
+    
+    if circles1 is not None and circles2 is not None:
+        circles1 = np.round(circles1[0, :]).astype("int")
+        circles2 = np.round(circles2[0, :]).astype("int")
+        
+        for (x1_c, y1_c, r1_c) in circles1:
+            best_match = None
+            min_dist = float('inf')
+            for (x2_c, y2_c, r2_c) in circles2:
+                dist = abs(y1_c - y2_c) + abs(r1_c - r2_c)
+                if dist < 50: # Threshold for match
+                    if dist < min_dist:
+                        min_dist = dist
+                        best_match = (x2_c, y2_c)
+            if best_match:
+                x1.append([x1_c, y1_c])
+                x2.append([best_match[0], best_match[1]])
+    return np.array(x1), np.array(x2)
 
 def find_match(img1, img2, show_window=True):
     # To do
@@ -236,7 +305,21 @@ def align_image_using_feature(x1, x2, ransac_thr, ransac_iter, img1=None, img2=N
     are incorrect (outliers).
     '''
     if len(x1) < num_samples:
-        return np.eye(3), None
+        if img1 is not None and img2 is not None and len(x1) > 0:
+            h1, w1 = img1.shape[:2]
+            h2, w2 = img2.shape[:2]
+            vis = np.zeros((max(h1, h2), w1 + w2, 3), np.uint8)
+            img1_c = img1 if len(img1.shape) == 3 else cv2.cvtColor(img1, cv2.COLOR_GRAY2BGR)
+            img2_c = img2 if len(img2.shape) == 3 else cv2.cvtColor(img2, cv2.COLOR_GRAY2BGR)
+            vis[:h1, :w1] = img1_c
+            vis[:h2, w1:w1+w2] = img2_c
+            best_inliers = [True] * len(x1)
+            for i in range(len(x1)):
+                pt1 = (int(x1[i][0]), int(x1[i][1]))
+                pt2 = (int(x2[i][0] + w1), int(x2[i][1]))
+                cv2.line(vis, pt1, pt2, (0, 255, 0), 2)
+            return np.eye(3), vis, best_inliers
+        return np.eye(3), None, None
 
     for i in range(ransac_iter):
         # Select random samples
@@ -355,7 +438,7 @@ def align_image_using_feature(x1, x2, ransac_thr, ransac_iter, img1=None, img2=N
         
     print(f"Number of inliers found: {max_inlier_count}")
     print("Affine Transformation Matrix A:\n", A)
-    return A, vis
+    return A, vis, best_inliers
 def visualize_find_match(img1, img2, x1, x2, img_h=500, mask=None):
     assert x1.shape == x2.shape, 'x1 and x2 should have same shape!'
     scale_factor1 = img_h/img1.shape[0]
