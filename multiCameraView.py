@@ -72,7 +72,6 @@ def task4():
     cv2.namedWindow("Multi-Camera View", cv2.WINDOW_AUTOSIZE)
     cv2.moveWindow("Multi-Camera View", 0, 0)
 
-    circle_deque = deque(maxlen=2)
     misc_deque = deque(maxlen=100)
     while True:
         frames = []
@@ -123,40 +122,13 @@ def task4():
                 
                 # Find matches on clean grayscale images before drawing on them
                 sx1, sx2, _, _, _ = find_match(img_left_gray, img_right_gray, show_window=False)
-                cx1, cx2 = find_circle_match(img_left_gray, img_right_gray)
-                
-                x1_list = []
-                x2_list = []
-                if len(sx1) > 0:
-                    x1_list.append(sx1)
-                    x2_list.append(sx2)
-                if len(cx1) > 0:
-                    x1_list.append(cx1)
-                    x2_list.append(cx2)
-                
-                if x1_list:
-                    x1 = np.vstack(x1_list)
-                    x2 = np.vstack(x2_list)
-                else:
-                    x1 = np.array([])
-                    x2 = np.array([])
+                x1 = sx1
+                x2 = sx2
 
                 # --- Prepare visualization images with contours ---
                 # Convert to BGR to draw color contours
                 vis_img_left = cv2.cvtColor(img_left_gray, cv2.COLOR_GRAY2BGR)
                 vis_img_right = cv2.cvtColor(img_right_gray, cv2.COLOR_GRAY2BGR)
-
-                # Find and draw contours on left image
-                blurred_left = cv2.blur(img_left_gray, (3, 3))
-                canny_left = cv2.Canny(blurred_left, 50, 150)
-                contours_left, _ = cv2.findContours(canny_left, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                cv2.drawContours(vis_img_left, contours_left, -1, (0, 0, 255), 2)
-
-                # Find and draw contours on right image
-                blurred_right = cv2.blur(img_right_gray, (3, 3))
-                canny_right = cv2.Canny(blurred_right, 50, 150)
-                contours_right, _ = cv2.findContours(canny_right, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                cv2.drawContours(vis_img_right, contours_right, -1, (0, 0, 255), 2)
 
                 try:
                     # Use RANSAC to find inliers and visualize them on the images with contours
@@ -170,24 +142,10 @@ def task4():
                             pt1 = (int(x1[i][0]), int(x1[i][1]))
                             pt2 = (int(x2[i][0] + w), int(x2[i][1]))
                             color = (0, 255, 0) if best_inliers[i] else (255, 0, 0)
-                            
-                            is_circle = False
-                            if len(cx1) > 0:
-                                dists = np.linalg.norm(cx1 - x1[i], axis=1)
-                                if np.min(dists) < 1.0:
-                                    is_circle = True
-                            
-                            if is_circle:
-                                circle_deque.append((pt1, pt2, color, is_circle))
-                            else:
-                                misc_deque.append((pt1, pt2, color, is_circle))
+                            misc_deque.append((pt1, pt2, color))
 
-                    all_matches = list(circle_deque) + list(misc_deque)
-                    for (pt1, pt2, color, is_circle) in all_matches:
+                    for (pt1, pt2, color) in misc_deque:
                         cv2.line(combined_vis, pt1, pt2, color, 2)
-                        if is_circle:
-                            cv2.circle(combined_vis, pt1, 15, (0, 255, 255), 2)
-                            cv2.circle(combined_vis, pt2, 15, (0, 255, 255), 2)
                     
                     match_vis_img = combined_vis
                 except Exception as e:
@@ -217,31 +175,6 @@ def task4():
         cap.release()
     cv2.destroyAllWindows()
     return combined_image
-
-def find_circle_match(img1, img2):
-    circles1 = cv2.HoughCircles(img1, cv2.HOUGH_GRADIENT, 1, 20, param1=50, param2=30, minRadius=10, maxRadius=300)
-    circles2 = cv2.HoughCircles(img2, cv2.HOUGH_GRADIENT, 1, 20, param1=50, param2=30, minRadius=10, maxRadius=300)
-    
-    x1 = []
-    x2 = []
-    
-    if circles1 is not None and circles2 is not None:
-        circles1 = np.round(circles1[0, :]).astype("int")
-        circles2 = np.round(circles2[0, :]).astype("int")
-        
-        for (x1_c, y1_c, r1_c) in circles1:
-            best_match = None
-            min_dist = float('inf')
-            for (x2_c, y2_c, r2_c) in circles2:
-                dist = abs(y1_c - y2_c) + abs(r1_c - r2_c)
-                if dist < 50: # Threshold for match
-                    if dist < min_dist:
-                        min_dist = dist
-                        best_match = (x2_c, y2_c)
-            if best_match:
-                x1.append([x1_c, y1_c])
-                x2.append([best_match[0], best_match[1]])
-    return np.array(x1), np.array(x2)
 
 def find_match(img1, img2, show_window=True):
     # To do
