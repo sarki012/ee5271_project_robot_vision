@@ -72,7 +72,7 @@ def task4():
     cv2.namedWindow("Multi-Camera View", cv2.WINDOW_AUTOSIZE)
     cv2.moveWindow("Multi-Camera View", 0, 0)
 
-    misc_deque = deque(maxlen=100)
+    misc_deque = deque(maxlen=20)
     while True:
         frames = []
         gray_frames = {}
@@ -132,21 +132,24 @@ def task4():
 
                 try:
                     # Use RANSAC to find inliers and visualize them on the images with contours
-                    _, _, best_inliers = align_image_using_feature(x1, x2, 5.0, 200, vis_img_left, vis_img_right)
-                    
                     h, w = vis_img_left.shape[:2]
                     combined_vis = np.hstack((vis_img_left, vis_img_right))
 
-                    if best_inliers is not None:
-                        for i in range(len(x1)):
+                    inliers_mask = None
+                    if len(x1) >= 4:
+                        _, mask = cv2.findHomography(x1, x2, cv2.RANSAC, 5.0)
+                        if mask is not None:
+                            inliers_mask = mask.ravel()
+
+                    for i in range(len(x1)):
+                        if inliers_mask is not None and inliers_mask[i]:
                             pt1 = (int(x1[i][0]), int(x1[i][1]))
                             pt2 = (int(x2[i][0] + w), int(x2[i][1]))
-                            color = (0, 255, 0) if best_inliers[i] else (255, 0, 0)
+                            color = (0, 255, 0)
                             misc_deque.append((pt1, pt2, color))
 
                     for (pt1, pt2, color) in misc_deque:
                         cv2.line(combined_vis, pt1, pt2, color, 2)
-                    
                     match_vis_img = combined_vis
                 except Exception as e:
                     # Handle cases where matching fails
@@ -219,243 +222,6 @@ def find_match(img1, img2, show_window=True):
     x_array1 = np.array(x1)
     x_array2 = np.array(x2)
     return x_array1, x_array2, keypoints1, keypoints2, good_matches
-
-def align_image_using_feature(x1, x2, ransac_thr, ransac_iter, img1=None, img2=None):
-    # To do
-    '''
-    RANSAC algorithm for Affine Transformation fitting. 
-    '''
-    inliers = []
-    distance = []
-    vis = None
-    num_inliers = 0
-    best_inliers = None
-    max_inlier_count = 0
-    num_samples = 3 
-    '''
-    The goal is to find the best 2D transformation (rotation, scale, translation, shear) 
-    that aligns the points in x1 with the points in x2, even if many of the initial matches 
-    are incorrect (outliers).
-    '''
-    if len(x1) < num_samples:
-        if img1 is not None and img2 is not None and len(x1) > 0:
-            h1, w1 = img1.shape[:2]
-            h2, w2 = img2.shape[:2]
-            vis = np.zeros((max(h1, h2), w1 + w2, 3), np.uint8)
-            img1_c = img1 if len(img1.shape) == 3 else cv2.cvtColor(img1, cv2.COLOR_GRAY2BGR)
-            img2_c = img2 if len(img2.shape) == 3 else cv2.cvtColor(img2, cv2.COLOR_GRAY2BGR)
-            vis[:h1, :w1] = img1_c
-            vis[:h2, w1:w1+w2] = img2_c
-            best_inliers = [True] * len(x1)
-            for i in range(len(x1)):
-                pt1 = (int(x1[i][0]), int(x1[i][1]))
-                pt2 = (int(x2[i][0] + w1), int(x2[i][1]))
-                cv2.line(vis, pt1, pt2, (0, 255, 0), 2)
-            return np.eye(3), vis, best_inliers
-        return np.eye(3), None, None
-
-    for i in range(ransac_iter):
-        # Select random samples
-        index = np.random.choice(len(x1), num_samples, replace=False)
-        points1 = x1[index]
-        points2 = x2[index]
-        
-        '''
-        Fit Affine Model to 3 points
-        We want AFFINE_TEMP such that points2 = AFFINE_TEMP * points1 (in homogeneous coordinates)
-        X_ARRAY * AFFINE_TRANSPOSE = Y_ARRAY  =>  AFFINE_TRANSPOSE = inv(X_ARRAY) * Y_ARRAY
-        It calculates a temporary 2x3 affine matrix AFFINE_TEMP that perfectly maps the 3 
-        randomly chosen source points (pts1) to their corresponding target points (pts2). This 
-        is done by solving the linear system Y_ARRAY = AFFINE_TEMP * X_ARRAY.
-        '''
-        X_ARRAY = np.hstack((points1, np.ones((3, 1))))     # Inserts a column of 1's (x, y, 1), homogenous coordinates
-        Y_ARRAY = points2
-        try:
-            if np.linalg.matrix_rank(X_ARRAY) < 3:    # Makes sure that all 3 points aren't on the same line
-                continue
-            AFFINE_TRANSPOSE = np.linalg.solve(X_ARRAY, Y_ARRAY)
-            AFFINE_TEMP = AFFINE_TRANSPOSE.T # 2x3 matrix
-        except np.linalg.LinAlgError:
-            continue
-        
-        '''
-        Transform all x1 points using M
-        Once a candidate transformation (AFFINE_TEMP) is calculated from the 3 random points, 
-        the code tests how well it works for all the other points. X_all becomes an (N, 3) 
-        matrix where every row is (x, y, 1).
-        X_all: The source points in homogeneous coordinates Nx3.
-        AFFINE_TEMP: The 2x3 affine matrix calculated from the random sample.
-        x2_predicted is an Nx2 matrix containing the predicted coordinates in the second image.
-        '''
-        X_all = np.hstack((x1, np.ones((len(x1), 1))))
-        x2_predicted = X_all @ AFFINE_TEMP.T
-        
-        '''
-        x2: where the points are. x2_predicted: where the points should be.
-        If diff is small, count as an inlier.
-        '''
-        diff = x2 - x2_predicted
-        distance = np.linalg.norm(diff, axis=1)
-        
-        '''
-        Points with an error smaller than the threshold are marked as inliers. These are the "good" 
-        matches that agree with the current model.
-        distance: This is a 1D NumPy array containing the error for each point. The error is the 
-        pixel distance between where a point from the first image is predicted to be in the second 
-        image (using the temporary model AFFINE_TEMP) and where it actually is. 
-        inliers is a mask with 
-        '''
-        inliers = distance < ransac_thr     # inliers is a boolean mask, True if distance < ransac_thr
-        num_inliers = np.sum(inliers)
-
-        '''
-        It keeps track of the model that has the highest number of inliers. This is assumed to be 
-        the correct model. num_inliers and best_inliers are boolean masks with True at the index
-        where distance is < ransac_thr.
-        '''  
-        if num_inliers > max_inlier_count:
-            max_inlier_count = num_inliers
-            best_inliers = inliers
-    
-    # Re-fit with all inliers
-    if best_inliers is not None and max_inlier_count >= 3:
-        if img1 is not None and img2 is not None:
-            h1, w1 = img1.shape[:2]
-            h2, w2 = img2.shape[:2]
-            
-            # Create a color canvas to draw on
-            vis = np.zeros((max(h1, h2), w1 + w2, 3), np.uint8)
-            
-            # Place images on the canvas, converting to color if they are grayscale
-            img1_c = img1 if len(img1.shape) == 3 else cv2.cvtColor(img1, cv2.COLOR_GRAY2BGR)
-            img2_c = img2 if len(img2.shape) == 3 else cv2.cvtColor(img2, cv2.COLOR_GRAY2BGR)
-            
-            vis[:h1, :w1] = img1_c
-            vis[:h2, w1:w1+w2] = img2_c
-
-            for i in range(len(x1)):
-                pt1 = (int(x1[i][0]), int(x1[i][1]))
-                pt2 = (int(x2[i][0] + w1), int(x2[i][1]))
-                color = (0, 255, 0) if best_inliers[i] else (0, 0, 255)
-                cv2.line(vis, pt1, pt2, color, 1)
-            
-            # cv2.imshow("RANSAC Inliers", vis)
-            # cv2.waitKey(0)
-        '''
-        It extracts the actual coordinates of all the "good" points (inlier_x1, inlier_x2) using 
-        the saved mask best_inliers.
-        '''
-        inlier_x1 = x1[best_inliers]
-        inlier_x2 = x2[best_inliers]
-        
-        X_ARRAY = np.hstack((inlier_x1, np.ones((len(inlier_x1), 1))))
-        Y_ARRAY = inlier_x2
-        
-        '''
-        It takes all the inliers found (which could be hundreds of points) and performs a 
-        Least Squares fit. Unlike solve (which hits 3 points exactly), lstsq finds the 
-        transformation that minimizes the average error across all valid points. This produces a 
-        much more accurate and stable matrix.
-        '''
-        res = np.linalg.lstsq(X_ARRAY, Y_ARRAY, rcond=None)
-        AFFINE_TRANSPOSE = res[0]
-        A_AFFINE = AFFINE_TRANSPOSE.T
-        '''
-        It formats the result into a standard 3x3 homogeneous affine matrix 
-        (adding [0, 0, 1] at the bottom) so it can be used for image warping later.
-        '''
-        A = np.vstack((A_AFFINE, [0, 0, 1]))
-    else:
-        print("RANSAC failed.")
-        A = np.eye(3)       # Return identity matrix.
-        
-    print(f"Number of inliers found: {max_inlier_count}")
-    print("Affine Transformation Matrix A:\n", A)
-    return A, vis, best_inliers
-def visualize_find_match(img1, img2, x1, x2, img_h=500, mask=None):
-    assert x1.shape == x2.shape, 'x1 and x2 should have same shape!'
-    scale_factor1 = img_h/img1.shape[0]
-    scale_factor2 = img_h/img2.shape[0]
-    img1_resized = cv2.resize(img1, None, fx=scale_factor1, fy=scale_factor1)
-    img2_resized = cv2.resize(img2, None, fx=scale_factor2, fy=scale_factor2)
-    x1 = x1 * scale_factor1
-    x2 = x2 * scale_factor2
-    x2[:, 0] += img1_resized.shape[1]
-    
-    if len(img1_resized.shape) == 2:
-        img1_resized = cv2.cvtColor(img1_resized, cv2.COLOR_GRAY2BGR)
-    if len(img2_resized.shape) == 2:
-        img2_resized = cv2.cvtColor(img2_resized, cv2.COLOR_GRAY2BGR)
-
-    img = np.hstack((img1_resized, img2_resized))
-    cv2.putText(img, "Image 1", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-    cv2.putText(img, "Image 2", (img1_resized.shape[1] + 10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-    
-    indices = range(x1.shape[0])
-    if mask is not None:
-        indices = np.argsort(mask)
-
-    for i in indices:
-        color = (255, 0, 0)
-        if mask is not None and mask[i]:
-            color = (0, 255, 255)
-        pt1 = (int(x1[i, 0]), int(x1[i, 1]))
-        pt2 = (int(x2[i, 0]), int(x2[i, 1]))
-        cv2.line(img, pt1, pt2, color, 1)
-        cv2.circle(img, pt1, 3, color, -1)
-        cv2.circle(img, pt2, 3, color, -1)
-
-    cv2.imshow("Matches Visualization", img)
-    cv2.waitKey(0)
-
-def visualize_align_image(template, target, A, A_refined, errors=None):
-    img_warped_init = warp_image(target, A, template.shape)
-    img_warped_optim = warp_image(target, A_refined, template.shape)
-    err_img_init = np.abs(img_warped_init - template)
-    err_img_optim = np.abs(img_warped_optim - template)
-    img_warped_init = np.uint8(img_warped_init)
-    img_warped_optim = np.uint8(img_warped_optim)
-    overlay_init = cv2.addWeighted(template, 0.5, img_warped_init, 0.5, 0)
-    overlay_optim = cv2.addWeighted(template, 0.5, img_warped_optim, 0.5, 0)
-    
-    # Normalize errors for visualization
-    err_img_init = cv2.normalize(err_img_init, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-    err_img_optim = cv2.normalize(err_img_optim, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-    err_img_init = cv2.applyColorMap(err_img_init, cv2.COLORMAP_JET)
-    err_img_optim = cv2.applyColorMap(err_img_optim, cv2.COLORMAP_JET)
-
-    # Helper to convert to BGR if needed
-    def to_bgr(img):
-        if len(img.shape) == 2:
-            return cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-        return img
-
-    template_bgr = to_bgr(template)
-    init_warp_bgr = to_bgr(img_warped_init)
-    optim_warp_bgr = to_bgr(img_warped_optim)
-    overlay_init_bgr = to_bgr(overlay_init)
-    overlay_optim_bgr = to_bgr(overlay_optim)
-
-    # Stack images
-    row1 = np.hstack((template_bgr, init_warp_bgr, overlay_init_bgr, err_img_init))
-    row2 = np.hstack((template_bgr, optim_warp_bgr, overlay_optim_bgr, err_img_optim))
-    grid = np.vstack((row1, row2))
-
-    # Resize to fit screen
-    scale = 1200 / grid.shape[1]
-    if scale < 1:
-        grid = cv2.resize(grid, None, fx=scale, fy=scale)
-
-    cv2.imshow("Alignment Results", grid)
-    cv2.waitKey(0)
-
-def warp_image(img, A, output_size):
-    # To do
-    '''
-    This function performs Inverse (Backward) Warping. It transforms the input image img into a new
-    image of size output_size based on the affine transformation matrix A.
-    '''
-    return cv2.warpAffine(img, A[:2, :], (output_size[1], output_size[0]))
 
 if __name__ == "__main__":
     task4()
