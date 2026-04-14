@@ -149,6 +149,10 @@ def calibrate_camera_for_intrinsic_parameters(images_prefix):
     #NOTE: images_prefix contains camera name: "frames/camera0*".
     images_names = glob.glob(images_prefix)
 
+    if not images_names:
+        print(f"Error: No images found matching {images_prefix}")
+        quit()
+
     #read all frames
     images = [cv.imread(imname, 1) for imname in images_names]
 
@@ -190,18 +194,30 @@ def calibrate_camera_for_intrinsic_parameters(images_prefix):
             #opencv can attempt to improve the checkerboard coordinates
             corners = cv.cornerSubPix(gray, corners, conv_size, (-1, -1), criteria)
             cv.drawChessboardCorners(frame, (rows,columns), corners, ret)
-            cv.putText(frame, 'If detected points are poor, press "s" to skip this sample', (25, 25), cv.FONT_HERSHEY_COMPLEX, 1, (0,0,255), 1)
+            cv.putText(frame, 'Press "s" in terminal to skip, or any other key to accept', (25, 25), cv.FONT_HERSHEY_COMPLEX, 1, (0,0,255), 1)
 
             cv.imshow('img', frame)
-            k = cv.waitKey(0)
+            cv.waitKey(1) # Refresh window to show the image
 
-            if k & 0xFF == ord('s'):
+            print('Press "s" in terminal to skip this sample, or any other key to accept...')
+            old_settings = termios.tcgetattr(sys.stdin)
+            try:
+                tty.setcbreak(sys.stdin.fileno())
+                k = sys.stdin.read(1)
+            finally:
+                termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+
+            if k.lower() == 's':
                 print('skipping')
                 continue
 
             objpoints.append(objp)
             imgpoints.append(corners)
 
+    if len(objpoints) == 0:
+        print(f"Error: Could not find checkerboard corners in any images for {images_prefix}.")
+        print("Please verify that your checkerboard is fully visible, well-lit, and that 'checkerboard_rows' and 'checkerboard_columns' in your settings match the number of INNER corners.")
+        quit()
 
     cv.destroyAllWindows()
     ret, cmtx, dist, rvecs, tvecs = cv.calibrateCamera(objpoints, imgpoints, (width, height), None, None)
@@ -351,6 +367,10 @@ def stereo_calibrate(mtx0, dist0, mtx1, dist1, frames_prefix_c0, frames_prefix_c
     c0_images = [cv.imread(imname, 1) for imname in c0_images_names]
     c1_images = [cv.imread(imname, 1) for imname in c1_images_names]
 
+    if len(c0_images) == 0 or len(c1_images) == 0:
+        print("Error: Missing paired images for stereo calibration.")
+        quit()
+
     #change this if stereo calibration not good.
     criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 100, 0.001)
 
@@ -396,15 +416,29 @@ def stereo_calibrate(mtx0, dist0, mtx1, dist1, frames_prefix_c0, frames_prefix_c
             cv.putText(frame1, 'O', (p0_c2[0], p0_c2[1]), cv.FONT_HERSHEY_COMPLEX, 1, (0,0,255), 1)
             cv.drawChessboardCorners(frame1, (rows,columns), corners2, c_ret2)
             cv.imshow('img2', frame1)
-            k = cv.waitKey(0)
 
-            if k & 0xFF == ord('s'):
+            cv.waitKey(1) # Refresh windows to show the images
+            
+            print('Press "s" in terminal to skip this stereo sample, or any other key to accept...')
+            old_settings = termios.tcgetattr(sys.stdin)
+            try:
+                tty.setcbreak(sys.stdin.fileno())
+                k = sys.stdin.read(1)
+            finally:
+                termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+
+            if k.lower() == 's':
                 print('skipping')
                 continue
 
             objpoints.append(objp)
             imgpoints_left.append(corners1)
             imgpoints_right.append(corners2)
+
+    if len(objpoints) == 0:
+        print("Error: Could not find checkerboard corners in any stereo image pairs.")
+        print("Please verify that the checkerboard is fully visible in BOTH cameras at the same time.")
+        quit()
 
     stereocalibration_flags = cv.CALIB_FIX_INTRINSIC
     ret, CM1, dist0, CM2, dist1, R, T, E, F = cv.stereoCalibrate(objpoints, imgpoints_left, imgpoints_right, mtx0, dist0,
