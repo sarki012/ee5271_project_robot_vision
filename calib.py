@@ -138,7 +138,9 @@ def save_frames_single_camera(camera_name):
         # Restore terminal settings
         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
 
+    cap.release()
     cv.destroyAllWindows()
+    cv.waitKey(1)
     if should_quit:
         quit()
 
@@ -220,6 +222,7 @@ def calibrate_camera_for_intrinsic_parameters(images_prefix):
         quit()
 
     cv.destroyAllWindows()
+    cv.waitKey(1)
     ret, cmtx, dist, rvecs, tvecs = cv.calibrateCamera(objpoints, imgpoints, (width, height), None, None)
     print('rmse:', ret)
     print('camera matrix:\n', cmtx)
@@ -352,7 +355,10 @@ def save_frames_two_cams(camera0_name, camera1_name):
         # Restore terminal settings
         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
 
+    cap0.release()
+    cap1.release()
     cv.destroyAllWindows()
+    cv.waitKey(1)
     if should_quit:
         quit()
 
@@ -446,6 +452,7 @@ def stereo_calibrate(mtx0, dist0, mtx1, dist1, frames_prefix_c0, frames_prefix_c
 
     print('rmse: ', ret)
     cv.destroyAllWindows()
+    cv.waitKey(1)
     return R, T
 
 #Converts Rotation matrix R and Translation vector T into a homogeneous representation matrix
@@ -553,7 +560,10 @@ def check_calibration(camera0_name, camera0_data, camera1_name, camera1_data, _z
         k = cv.waitKey(1)
         if k & 0xFF == 27: break
 
+    cap0.release()
+    cap1.release()
     cv.destroyAllWindows()
+    cv.waitKey(1)
 
 def get_world_space_origin(cmtx, dist, img_path):
 
