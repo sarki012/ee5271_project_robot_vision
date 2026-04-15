@@ -306,20 +306,20 @@ def save_frames_two_cams(camera0_name, camera1_name):
                 print('Cameras not returning video data. Exiting...')
                 quit()
 
-            frame0_small = cv.resize(frame0, None, fx=1./view_resize, fy=1./view_resize)
-            frame1_small = cv.resize(frame1, None, fx=1./view_resize, fy=1./view_resize)
+            frame0_small = cv.resize(frame0, (640, 480))
+            frame1_small = cv.resize(frame1, (640, 480))
 
             if not start:
-                cv.putText(frame0_small, "Make sure both cameras can see the calibration pattern well", (50,50), cv.FONT_HERSHEY_COMPLEX, 1, (0,0,255), 1)
-                cv.putText(frame0_small, "Press SPACEBAR in terminal to start", (50,100), cv.FONT_HERSHEY_COMPLEX, 1, (0,0,255), 1)
+                cv.putText(frame0_small, "Make sure both cameras see pattern", (15,50), cv.FONT_HERSHEY_COMPLEX, 0.5, (0,0,255), 1)
+                cv.putText(frame0_small, "Press SPACEBAR in terminal to start", (15,100), cv.FONT_HERSHEY_COMPLEX, 0.5, (0,0,255), 1)
             
             if start:
                 cooldown -= 1
-                cv.putText(frame0_small, "Cooldown: " + str(cooldown), (50,50), cv.FONT_HERSHEY_COMPLEX, 1, (0,255,0), 1)
-                cv.putText(frame0_small, "Num frames: " + str(saved_count), (50,100), cv.FONT_HERSHEY_COMPLEX, 1, (0,255,0), 1)
+                cv.putText(frame0_small, "Cooldown: " + str(cooldown), (15,50), cv.FONT_HERSHEY_COMPLEX, 0.8, (0,255,0), 1)
+                cv.putText(frame0_small, "Num frames: " + str(saved_count), (15,100), cv.FONT_HERSHEY_COMPLEX, 0.8, (0,255,0), 1)
                 
-                cv.putText(frame1_small, "Cooldown: " + str(cooldown), (50,50), cv.FONT_HERSHEY_COMPLEX, 1, (0,255,0), 1)
-                cv.putText(frame1_small, "Num frames: " + str(saved_count), (50,100), cv.FONT_HERSHEY_COMPLEX, 1, (0,255,0), 1)
+                cv.putText(frame1_small, "Cooldown: " + str(cooldown), (15,50), cv.FONT_HERSHEY_COMPLEX, 0.8, (0,255,0), 1)
+                cv.putText(frame1_small, "Num frames: " + str(saved_count), (15,100), cv.FONT_HERSHEY_COMPLEX, 0.8, (0,255,0), 1)
 
                 #save the frame when cooldown reaches 0.
                 if cooldown <= 0:
@@ -332,8 +332,9 @@ def save_frames_two_cams(camera0_name, camera1_name):
                     saved_count += 1
                     cooldown = cooldown_time
 
-            cv.imshow('frame0_small', frame0_small)
-            cv.imshow('frame1_small', frame1_small)
+            # Stack frames side-by-side and display
+            combined_frame = np.hstack((frame0_small, frame1_small))
+            cv.imshow('Stereo Calibration Capture', combined_frame)
             
             # Check for keyboard input from the terminal (non-blocking)
             if select.select([sys.stdin], [], [], 0.0)[0]:
@@ -417,11 +418,15 @@ def stereo_calibrate(mtx0, dist0, mtx1, dist1, frames_prefix_c0, frames_prefix_c
 
             cv.putText(frame0, 'O', (p0_c1[0], p0_c1[1]), cv.FONT_HERSHEY_COMPLEX, 1, (0,0,255), 1)
             cv.drawChessboardCorners(frame0, (rows,columns), corners1, c_ret1)
-            cv.imshow('img', frame0)
+            frame0_disp = cv.resize(frame0, (640, 480))
+            cv.imshow('img', frame0_disp)
+            cv.moveWindow('img', 0, 0)
 
             cv.putText(frame1, 'O', (p0_c2[0], p0_c2[1]), cv.FONT_HERSHEY_COMPLEX, 1, (0,0,255), 1)
             cv.drawChessboardCorners(frame1, (rows,columns), corners2, c_ret2)
-            cv.imshow('img2', frame1)
+            frame1_disp = cv.resize(frame1, (640, 480))
+            cv.imshow('img2', frame1_disp)
+            cv.moveWindow('img2', 640, 0)
 
             cv.waitKey(1) # Refresh windows to show the images
             
@@ -513,52 +518,67 @@ def check_calibration(camera0_name, camera0_data, camera1_name, camera1_data, _z
     pixel_points_camera0 = np.array(pixel_points_camera0)
     pixel_points_camera1 = np.array(pixel_points_camera1)
 
-    #open the video streams
-    cap0 = cv.VideoCapture(calibration_settings[camera0_name], cv.CAP_V4L2)
-    cap1 = cv.VideoCapture(calibration_settings[camera1_name], cv.CAP_V4L2)
+    old_settings = termios.tcgetattr(sys.stdin)
+    print("\nCalibration check running. Press 'q' in this terminal to exit.")
 
-    cap0.set(cv.CAP_PROP_FOURCC, cv.VideoWriter_fourcc('M', 'J', 'P', 'G'))
-    cap1.set(cv.CAP_PROP_FOURCC, cv.VideoWriter_fourcc('M', 'J', 'P', 'G'))
-    #set camera resolutions
-    width = calibration_settings['frame_width']
-    height = calibration_settings['frame_height']
-    cap0.set(3, width)
-    cap0.set(4, height)
-    cap1.set(3, width)
-    cap1.set(4, height)
+    try:
+        tty.setcbreak(sys.stdin.fileno())
+        #open the video streams
+        cap0 = cv.VideoCapture(calibration_settings[camera0_name], cv.CAP_V4L2)
+        cap1 = cv.VideoCapture(calibration_settings[camera1_name], cv.CAP_V4L2)
 
-    if not cap0.isOpened() or not cap1.isOpened():
-        print("Failed to open one or both cameras for calibration check.")
-        quit()
+        cap0.set(cv.CAP_PROP_FOURCC, cv.VideoWriter_fourcc('M', 'J', 'P', 'G'))
+        cap1.set(cv.CAP_PROP_FOURCC, cv.VideoWriter_fourcc('M', 'J', 'P', 'G'))
+        #set camera resolutions
+        width = calibration_settings['frame_width']
+        height = calibration_settings['frame_height']
+        cap0.set(3, width)
+        cap0.set(4, height)
+        cap1.set(3, width)
+        cap1.set(4, height)
 
-    while True:
-
-        ret0, frame0 = cap0.read()
-        ret1, frame1 = cap1.read()
-
-        if not ret0 or not ret1:
-            print('Video stream not returning frame data')
+        if not cap0.isOpened() or not cap1.isOpened():
+            print("Failed to open one or both cameras for calibration check.")
             quit()
 
-        #follow RGB colors to indicate XYZ axes respectively
-        colors = [(0,0,255), (0,255,0), (255,0,0)]
-        #draw projections to camera0
-        origin = tuple(pixel_points_camera0[0].astype(np.int32))
-        for col, _p in zip(colors, pixel_points_camera0[1:]):
-            _p = tuple(_p.astype(np.int32))
-            cv.line(frame0, origin, _p, col, 2)
-        
-        #draw projections to camera1
-        origin = tuple(pixel_points_camera1[0].astype(np.int32))
-        for col, _p in zip(colors, pixel_points_camera1[1:]):
-            _p = tuple(_p.astype(np.int32))
-            cv.line(frame1, origin, _p, col, 2)
+        while True:
 
-        cv.imshow('frame0', frame0)
-        cv.imshow('frame1', frame1)
+            ret0, frame0 = cap0.read()
+            ret1, frame1 = cap1.read()
 
-        k = cv.waitKey(1)
-        if k & 0xFF == 27: break
+            if not ret0 or not ret1:
+                print('Video stream not returning frame data')
+                quit()
+
+            #follow RGB colors to indicate XYZ axes respectively
+            colors = [(0,0,255), (0,255,0), (255,0,0)]
+            #draw projections to camera0
+            origin = tuple(pixel_points_camera0[0].astype(np.int32))
+            for col, _p in zip(colors, pixel_points_camera0[1:]):
+                _p = tuple(_p.astype(np.int32))
+                cv.line(frame0, origin, _p, col, 2)
+            
+            #draw projections to camera1
+            origin = tuple(pixel_points_camera1[0].astype(np.int32))
+            for col, _p in zip(colors, pixel_points_camera1[1:]):
+                _p = tuple(_p.astype(np.int32))
+                cv.line(frame1, origin, _p, col, 2)
+
+            # Resize and combine frames side-by-side
+            frame0_disp = cv.resize(frame0, (640, 480))
+            frame1_disp = cv.resize(frame1, (640, 480))
+            combined_frame = np.hstack((frame0_disp, frame1_disp))
+            cv.imshow('Calibration Check', combined_frame)
+
+            k = cv.waitKey(1)
+            if k & 0xFF == 27: break
+
+            if select.select([sys.stdin], [], [], 0.0)[0]:
+                key = sys.stdin.read(1)
+                if key.lower() == 'q' or key == '\x1b':
+                    break
+    finally:
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
 
     cap0.release()
     cap1.release()
