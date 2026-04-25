@@ -3,7 +3,7 @@
 
 import cv2
 import numpy as np
-import numpy as np
+import sys
 import math
 from collections import deque
 
@@ -16,7 +16,9 @@ def task4():
     camera_indices = []
     print("Scanning for cameras...")
     for i in range(10):
-        temp_cap = cv2.VideoCapture(i, cv2.CAP_V4L2)
+        # Use DirectShow on Windows for better webcam compatibility
+        backend = cv2.CAP_V4L2 if sys.platform.startswith('linux') else cv2.CAP_DSHOW
+        temp_cap = cv2.VideoCapture(i, backend)
         if temp_cap.isOpened():
             # Set MJPG to ensure we can read a frame without bandwidth issues
             temp_cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
@@ -27,6 +29,10 @@ def task4():
             temp_cap.release()
         if len(camera_indices) >= 3:
             break
+            
+    if not camera_indices:
+        print("Error: No cameras detected. Check USB connections, Windows Camera Privacy settings, or if another app is using them.")
+        sys.exit(1)
             
     # Define labels for specific camera indices to differentiate them
     camera_labels = {
@@ -54,8 +60,10 @@ def task4():
 
     # Open video capture for each camera
     for index in camera_indices:
-        # Force V4L2 backend to avoid GStreamer errors with USB cameras on Pi
-        cap = cv2.VideoCapture(index, cv2.CAP_V4L2)
+        # Force V4L2 backend on Linux to avoid GStreamer errors with USB cameras on Pi.
+        # Use DirectShow on Windows for better webcam compatibility.
+        backend = cv2.CAP_V4L2 if sys.platform.startswith('linux') else cv2.CAP_DSHOW
+        cap = cv2.VideoCapture(index, backend)
         # Set MJPG to save USB bandwidth
         cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
         # Set a reasonable resolution for display to fit all on screen
@@ -124,6 +132,15 @@ def task4():
                 sx1, sx2, _, _, _ = find_match(img_left_gray, img_right_gray, show_window=False)
                 x1 = sx1
                 x2 = sx2
+
+                if len(x1) > 0:
+                    disparities = np.abs(x1[:, 0] - x2[:, 0])
+                    avg_disparity = np.mean(disparities)
+                    print(f"Average Disparity: {avg_disparity:.2f} pixels")
+                    
+                    if avg_disparity > 0:
+                        Z = (.009 * 0.146) / avg_disparity
+                        print(f"Z = {Z:.6f}")
 
                 # --- Prepare visualization images with contours ---
                 # Convert to BGR to draw color contours
