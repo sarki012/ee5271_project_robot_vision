@@ -80,6 +80,36 @@ def task4():
     cv2.namedWindow("Multi-Camera View", cv2.WINDOW_AUTOSIZE)
     cv2.moveWindow("Multi-Camera View", 0, 0)
 
+    # --- Stereo Rectification Setup ---
+    # NOTE: Update the remaining fx, fy, Cy, R, and T values with the output from calib.py
+    rectify_size = (480, 360)
+    
+    # Intrinsic matrices dynamically scaled for the 480x360 resolution.
+    # Assuming original calibration was at 1280x720 yielding fx=1200:
+    # 1200 * (480 / 1280) = 450 pixels.
+    K_left = np.array([[450.0, 0.0, 240.0],
+                       [0.0, 450.0, 180.0],
+                       [0.0, 0.0, 1.0]], dtype=np.float64)
+    D_left = np.zeros(5, dtype=np.float64)
+    
+    K_right = np.array([[450.0, 0.0, 240.0],
+                        [0.0, 450.0, 180.0],
+                        [0.0, 0.0, 1.0]], dtype=np.float64)
+    D_right = np.zeros(5, dtype=np.float64)
+    
+    # Extrinsic parameters (Rotation and Translation between the two cameras)
+    # Cameras are parallel (R = Identity). Camera1 is 14.6 cm to the right of Camera0.
+    R_ext = np.eye(3, dtype=np.float64)
+    T_ext = np.array([[14.6], [0.0], [0.0]], dtype=np.float64) 
+    
+    R1, R2, P1, P2, Q, _, _ = cv2.stereoRectify(
+        K_left, D_left, K_right, D_right, rectify_size, R_ext, T_ext
+    )
+    
+    left_map1, left_map2 = cv2.initUndistortRectifyMap(K_left, D_left, R1, P1, rectify_size, cv2.CV_16SC2)
+    right_map1, right_map2 = cv2.initUndistortRectifyMap(K_right, D_right, R2, P2, rectify_size, cv2.CV_16SC2)
+    # ----------------------------------
+
     misc_deque = deque(maxlen=20)
     while True:
         frames = []
@@ -92,6 +122,12 @@ def task4():
                     # Resize frame to ensure they match for stacking
                     # (480, 360) matches the set resolution (1.5x of 320x240)
                     frame = cv2.resize(frame, (480, 360))
+
+                    # Apply stereo rectification mapping
+                    if i == left_cam_idx:
+                        frame = cv2.remap(frame, left_map1, left_map2, cv2.INTER_LINEAR)
+                    elif i == right_cam_idx:
+                        frame = cv2.remap(frame, right_map1, right_map2, cv2.INTER_LINEAR)
 
                     # Prepare gray image
                     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -139,7 +175,8 @@ def task4():
                     print(f"Average Disparity: {avg_disparity:.2f} pixels")
                     
                     if avg_disparity > 0:
-                        Z = (.009 * 0.146) / avg_disparity
+                        # Z = (scaled_focal_length * baseline_meters) / disparity
+                        Z = (450.0 * 0.146) / avg_disparity
                         print(f"Z = {Z:.6f}")
 
                 # --- Prepare visualization images with contours ---
