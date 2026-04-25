@@ -37,7 +37,7 @@ def parse_calibration_settings_file(filename):
 
     if not os.path.exists(filename):
         print('File does not exist:', filename)
-        quit()
+        sys.exit(1)
     
     print('Using for calibration settings: ', filename)
 
@@ -47,7 +47,7 @@ def parse_calibration_settings_file(filename):
     #rudimentray check to make sure correct file was loaded
     if 'camera0' not in calibration_settings.keys():
         print('camera0 key was not found in the settings file. Check if correct calibration_settings.yaml file was passed')
-        quit()
+        sys.exit(1)
 
 
 #Open camera stream and save frames
@@ -73,7 +73,12 @@ def save_frames_single_camera(camera_name):
 
     #open video stream and change resolution.
     #Note: if unsupported resolution is used, this does NOT raise an error.
-    cap = cv.VideoCapture(camera_device_id, cv.CAP_V4L2)
+    backend = cv.CAP_V4L2 if sys.platform.startswith('linux') else cv.CAP_ANY
+    cap = cv.VideoCapture(camera_device_id, backend)
+
+    if not cap.isOpened() and backend != cv.CAP_ANY:
+        cap = cv.VideoCapture(camera_device_id, cv.CAP_ANY)
+
     cap.set(cv.CAP_PROP_FOURCC, cv.VideoWriter_fourcc('M', 'J', 'P', 'G'))
     cap.set(3, width)
     cap.set(4, height)
@@ -82,6 +87,7 @@ def save_frames_single_camera(camera_name):
     start = False
     saved_count = 0
 
+    window_name = f'{camera_name} Calibration Capture'
     should_quit = False
     try:
         # Set terminal to raw/cbreak mode
@@ -89,7 +95,8 @@ def save_frames_single_camera(camera_name):
 
         if not cap.isOpened():
             print(f"Failed to open camera {camera_name} (ID: {camera_device_id}).")
-            quit()
+            print("Hint: On Linux/Raspberry Pi, odd indices (like 1 or 3) are often metadata nodes. Try 0 or 2 in your YAML file.")
+            sys.exit(1)
 
         while True:
         
@@ -97,7 +104,7 @@ def save_frames_single_camera(camera_name):
             if ret == False:
                 #if no video data is received, can't calibrate the camera, so exit.
                 print("No video data received from camera. Exiting...")
-                quit()
+                sys.exit(1)
 
             frame_small = cv.resize(frame, None, fx = 1/view_resize, fy=1/view_resize)
 
@@ -116,7 +123,7 @@ def save_frames_single_camera(camera_name):
                     saved_count += 1
                     cooldown = cooldown_time
 
-            cv.imshow('frame_small', frame_small)
+            cv.imshow(window_name, frame_small)
             
             # Check for keyboard input from the terminal (non-blocking)
             if select.select([sys.stdin], [], [], 0.0)[0]:
@@ -139,10 +146,14 @@ def save_frames_single_camera(camera_name):
         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
 
     cap.release()
-    cv.destroyAllWindows()
-    cv.waitKey(1)
+    try:
+        cv.destroyWindow(window_name)
+    except Exception:
+        pass
+    for _ in range(5):
+        cv.waitKey(1)
     if should_quit:
-        quit()
+        sys.exit(0)
 
 
 #Calibrate single camera to obtain camera intrinsic parameters from saved frames.
@@ -153,7 +164,7 @@ def calibrate_camera_for_intrinsic_parameters(images_prefix):
 
     if not images_names:
         print(f"Error: No images found matching {images_prefix}")
-        quit()
+        sys.exit(1)
 
     #read all frames
     images = [cv.imread(imname, 1) for imname in images_names]
@@ -181,6 +192,7 @@ def calibrate_camera_for_intrinsic_parameters(images_prefix):
     #coordinates of the checkerboard in checkerboard world space.
     objpoints = [] # 3d point in real world space
 
+    window_name = f'Intrinsic Calibration {images_prefix}'
 
     for i, frame in enumerate(images):
         gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
@@ -198,7 +210,7 @@ def calibrate_camera_for_intrinsic_parameters(images_prefix):
             cv.drawChessboardCorners(frame, (rows,columns), corners, ret)
             cv.putText(frame, 'Press "s" in terminal to skip, or any other key to accept', (25, 25), cv.FONT_HERSHEY_COMPLEX, 1, (0,0,255), 1)
 
-            cv.imshow('img', frame)
+            cv.imshow(window_name, frame)
             cv.waitKey(1) # Refresh window to show the image
 
             print('Press "s" in terminal to skip this sample, or any other key to accept...')
@@ -219,10 +231,14 @@ def calibrate_camera_for_intrinsic_parameters(images_prefix):
     if len(objpoints) == 0:
         print(f"Error: Could not find checkerboard corners in any images for {images_prefix}.")
         print("Please verify that your checkerboard is fully visible, well-lit, and that 'checkerboard_rows' and 'checkerboard_columns' in your settings match the number of INNER corners.")
-        quit()
+        sys.exit(1)
 
-    cv.destroyAllWindows()
-    cv.waitKey(1)
+    try:
+        cv.destroyWindow(window_name)
+    except Exception:
+        pass
+    for _ in range(5):
+        cv.waitKey(1)
     ret, cmtx, dist, rvecs, tvecs = cv.calibrateCamera(objpoints, imgpoints, (width, height), None, None)
     print('rmse:', ret)
     print('camera matrix:\n', cmtx)
@@ -271,8 +287,14 @@ def save_frames_two_cams(camera0_name, camera1_name):
     number_to_save = calibration_settings['stereo_calibration_frames']
 
     #open the video streams
-    cap0 = cv.VideoCapture(calibration_settings[camera0_name], cv.CAP_V4L2)
-    cap1 = cv.VideoCapture(calibration_settings[camera1_name], cv.CAP_V4L2)
+    backend = cv.CAP_V4L2 if sys.platform.startswith('linux') else cv.CAP_ANY
+    cap0 = cv.VideoCapture(calibration_settings[camera0_name], backend)
+    cap1 = cv.VideoCapture(calibration_settings[camera1_name], backend)
+
+    if not cap0.isOpened() and backend != cv.CAP_ANY:
+        cap0 = cv.VideoCapture(calibration_settings[camera0_name], cv.CAP_ANY)
+    if not cap1.isOpened() and backend != cv.CAP_ANY:
+        cap1 = cv.VideoCapture(calibration_settings[camera1_name], cv.CAP_ANY)
 
     cap0.set(cv.CAP_PROP_FOURCC, cv.VideoWriter_fourcc('M', 'J', 'P', 'G'))
     cap1.set(cv.CAP_PROP_FOURCC, cv.VideoWriter_fourcc('M', 'J', 'P', 'G'))
@@ -295,7 +317,8 @@ def save_frames_two_cams(camera0_name, camera1_name):
 
         if not cap0.isOpened() or not cap1.isOpened():
             print("Failed to open one or both cameras for stereo calibration.")
-            quit()
+            print("Hint: On Linux/Raspberry Pi, odd indices (like 1 or 3) are often metadata nodes. Try 0 or 2 in your YAML file.")
+            sys.exit(1)
 
         while True:
 
@@ -304,7 +327,7 @@ def save_frames_two_cams(camera0_name, camera1_name):
 
             if not ret0 or not ret1:
                 print('Cameras not returning video data. Exiting...')
-                quit()
+                sys.exit(1)
 
             frame0_small = cv.resize(frame0, (640, 480))
             frame1_small = cv.resize(frame1, (640, 480))
@@ -358,10 +381,14 @@ def save_frames_two_cams(camera0_name, camera1_name):
 
     cap0.release()
     cap1.release()
-    cv.destroyAllWindows()
-    cv.waitKey(1)
+    try:
+        cv.destroyWindow('Stereo Calibration Capture')
+    except Exception:
+        pass
+    for _ in range(5):
+        cv.waitKey(1)
     if should_quit:
-        quit()
+        sys.exit(0)
 
 
 #open paired calibration frames and stereo calibrate for cam0 to cam1 coorindate transformations
@@ -376,7 +403,7 @@ def stereo_calibrate(mtx0, dist0, mtx1, dist1, frames_prefix_c0, frames_prefix_c
 
     if len(c0_images) == 0 or len(c1_images) == 0:
         print("Error: Missing paired images for stereo calibration.")
-        quit()
+        sys.exit(1)
 
     #change this if stereo calibration not good.
     criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 100, 0.001)
@@ -449,15 +476,20 @@ def stereo_calibrate(mtx0, dist0, mtx1, dist1, frames_prefix_c0, frames_prefix_c
     if len(objpoints) == 0:
         print("Error: Could not find checkerboard corners in any stereo image pairs.")
         print("Please verify that the checkerboard is fully visible in BOTH cameras at the same time.")
-        quit()
+        sys.exit(1)
 
     stereocalibration_flags = cv.CALIB_FIX_INTRINSIC
     ret, CM1, dist0, CM2, dist1, R, T, E, F = cv.stereoCalibrate(objpoints, imgpoints_left, imgpoints_right, mtx0, dist0,
                                                                  mtx1, dist1, (width, height), criteria = criteria, flags = stereocalibration_flags)
 
     print('rmse: ', ret)
-    cv.destroyAllWindows()
-    cv.waitKey(1)
+    try:
+        cv.destroyWindow('img')
+        cv.destroyWindow('img2')
+    except Exception:
+        pass
+    for _ in range(5):
+        cv.waitKey(1)
     return R, T
 
 #Converts Rotation matrix R and Translation vector T into a homogeneous representation matrix
@@ -524,8 +556,14 @@ def check_calibration(camera0_name, camera0_data, camera1_name, camera1_data, _z
     try:
         tty.setcbreak(sys.stdin.fileno())
         #open the video streams
-        cap0 = cv.VideoCapture(calibration_settings[camera0_name], cv.CAP_V4L2)
-        cap1 = cv.VideoCapture(calibration_settings[camera1_name], cv.CAP_V4L2)
+        backend = cv.CAP_V4L2 if sys.platform.startswith('linux') else cv.CAP_ANY
+        cap0 = cv.VideoCapture(calibration_settings[camera0_name], backend)
+        cap1 = cv.VideoCapture(calibration_settings[camera1_name], backend)
+
+        if not cap0.isOpened() and backend != cv.CAP_ANY:
+            cap0 = cv.VideoCapture(calibration_settings[camera0_name], cv.CAP_ANY)
+        if not cap1.isOpened() and backend != cv.CAP_ANY:
+            cap1 = cv.VideoCapture(calibration_settings[camera1_name], cv.CAP_ANY)
 
         cap0.set(cv.CAP_PROP_FOURCC, cv.VideoWriter_fourcc('M', 'J', 'P', 'G'))
         cap1.set(cv.CAP_PROP_FOURCC, cv.VideoWriter_fourcc('M', 'J', 'P', 'G'))
@@ -539,7 +577,8 @@ def check_calibration(camera0_name, camera0_data, camera1_name, camera1_data, _z
 
         if not cap0.isOpened() or not cap1.isOpened():
             print("Failed to open one or both cameras for calibration check.")
-            quit()
+            print("Hint: On Linux/Raspberry Pi, odd indices (like 1 or 3) are often metadata nodes. Try 0 or 2 in your YAML file.")
+            sys.exit(1)
 
         while True:
 
@@ -548,7 +587,7 @@ def check_calibration(camera0_name, camera0_data, camera1_name, camera1_data, _z
 
             if not ret0 or not ret1:
                 print('Video stream not returning frame data')
-                quit()
+                sys.exit(1)
 
             #follow RGB colors to indicate XYZ axes respectively
             colors = [(0,0,255), (0,255,0), (255,0,0)]
@@ -582,8 +621,12 @@ def check_calibration(camera0_name, camera0_data, camera1_name, camera1_data, _z
 
     cap0.release()
     cap1.release()
-    cv.destroyAllWindows()
-    cv.waitKey(1)
+    try:
+        cv.destroyWindow('Calibration Check')
+    except Exception:
+        pass
+    for _ in range(5):
+        cv.waitKey(1)
 
 def get_world_space_origin(cmtx, dist, img_path):
 
@@ -694,7 +737,7 @@ if __name__ == '__main__':
 
     if len(sys.argv) != 2:
         print('Call with settings filename: "python3 calibrate.py calibration_settings.yaml"')
-        quit()
+        sys.exit(1)
     
     #Open and parse the settings file
     parse_calibration_settings_file(sys.argv[1])
