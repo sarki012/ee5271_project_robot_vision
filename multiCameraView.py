@@ -169,6 +169,7 @@ def task4():
                 x1 = sx1
                 x2 = sx2
 
+                Z_text = ""
                 if len(x1) > 0:
                     disparities = np.abs(x1[:, 0] - x2[:, 0])
                     avg_disparity = np.mean(disparities)
@@ -178,11 +179,23 @@ def task4():
                         # Z = (scaled_focal_length * baseline_meters) / disparity
                         Z = (450.0 * 0.146) / avg_disparity
                         print(f"Z = {Z:.6f}")
+                        # Convert meters to inches
+                        Z_inches = Z * 39.3701
+                        Z_text = f"{Z_inches:.1f} in."
 
                 # --- Prepare visualization images with contours ---
                 # Convert to BGR to draw color contours
                 vis_img_left = cv2.cvtColor(img_left_gray, cv2.COLOR_GRAY2BGR)
                 vis_img_right = cv2.cvtColor(img_right_gray, cv2.COLOR_GRAY2BGR)
+
+                # --- Distance Window ---
+                depth_img = np.ones((200, 600, 3), dtype=np.uint8) * 255 # Plain white background
+                if Z_text:
+                    cv2.putText(depth_img, Z_text, (30, 130), cv2.FONT_HERSHEY_SIMPLEX, 4.0, (0, 0, 0), 10)
+                else:
+                    cv2.putText(depth_img, "N/A", (30, 130), cv2.FONT_HERSHEY_SIMPLEX, 4.0, (0, 0, 255), 10)
+                cv2.imshow("Distance", depth_img)
+                cv2.moveWindow("Distance", 980, 0)
 
                 try:
                     # Use RANSAC to find inliers and visualize them on the images with contours
